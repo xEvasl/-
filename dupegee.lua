@@ -1,5 +1,5 @@
 --// LocalScript — Client-side only
---// Minimal grey UI + Duplicate/Delete + collapse (X) + toggle by G
+--// Minimal grey UI + Duplicate/Delete + collapse (X) + toggle by G + draggable title bar
 --// No server calls. No DataStores. No E-key handling (compatibility only).
 
 -- =========================
@@ -29,6 +29,7 @@ local screenGui = Instance.new("ScreenGui")
 screenGui.Name = "CloneMenuUI"
 screenGui.ResetOnSpawn = false
 screenGui.IgnoreGuiInset = true
+screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 screenGui.Parent = playerGui
 
 -- Container panel (expanded a bit)
@@ -39,6 +40,7 @@ panel.Position = UDim2.new(0, 20, 1, -140)     -- bottom-left-ish
 panel.BackgroundColor3 = Color3.fromRGB(42, 42, 42)
 panel.BorderSizePixel = 0
 panel.Visible = true
+panel.Active = true  -- allow input capture
 panel.Parent = screenGui
 
 local panelCorner = Instance.new("UICorner")
@@ -69,6 +71,7 @@ titleBar.Name = "TitleBar"
 titleBar.Size = UDim2.new(1, -16, 0, 36)
 titleBar.Position = UDim2.new(0, 8, 0, 8)
 titleBar.BackgroundTransparency = 1
+titleBar.Active = true     -- for dragging
 titleBar.Parent = panel
 
 local titleLayout = Instance.new("UIListLayout")
@@ -147,7 +150,7 @@ local function makeButton(text)
 end
 
 local duplicateBtn = makeButton("Duplicate")
-local deleteBtn = makeButton("Delete") -- requested exact English text
+local deleteBtn = makeButton("Delete")
 
 -- Toast
 local toast = Instance.new("TextLabel")
@@ -350,41 +353,39 @@ local function duplicateEquipped()
 end
 
 -- =========================
--- ===  WIRE  EVENTS   =====
+-- ===  UI INTERACTIONS ====
 -- =========================
-duplicateBtn.MouseButton1Click:Connect(duplicateEquipped)
-deleteBtn.MouseButton1Click:Connect(deleteLatestClone)
-
--- Collapse via X button
 local menuOpen = true
 local function setMenuVisible(visible)
     menuOpen = visible
     panel.Visible = visible
     shadow.Visible = visible
-    -- Hide any toast when closing
     if not visible and toast.Visible then
         toast.Visible = false
     end
 end
 
+-- Buttons
+local debounce = false
+duplicateBtn.MouseButton1Click:Connect(function()
+    if debounce then return end; debounce = true
+    duplicateEquipped()
+    task.delay(0.1, function() debounce = false end)
+end)
+
+deleteBtn.MouseButton1Click:Connect(function()
+    if debounce then return end; debounce = true
+    deleteLatestClone()
+    task.delay(0.1, function() debounce = false end)
+end)
+
+-- Collapse via X button
 closeBtn.MouseButton1Click:Connect(function()
     setMenuVisible(false)
 end)
 
--- Toggle by G (don’t trigger while typing in textboxes)
+-- Toggle by G (don’t trigger while typing)
 UserInputService.InputBegan:Connect(function(input, gp)
     if gp then return end
     if input.KeyCode == TOGGLE_KEY then
-        if UserInputService:GetFocusedTextBox() then return end
-        setMenuVisible(not menuOpen)
-    end
-end)
-
--- Keep shadow aligned
-RunService.RenderStepped:Connect(function()
-    if shadow and panel then
-        shadow.Position = panel.Position + UDim2.new(0, 4, 0, 4)
-        shadow.Size = panel.Size
-        shadow.Visible = panel.Visible
-    end
-end)
+        if UserInputService:Get
