@@ -1,13 +1,12 @@
---// LocalScript — Client-only version (no server code at all)
---// RotUp! Premium: grey UI, Duplicate/Delete, draggable, collapse (X), toggle (G)
---// NOTE: Client cannot place items on a server-side platform without a server Remote.
+--// LocalScript — RotUp! Premium: grey UI, Duplicate/Delete, draggable, collapse (X), toggle (G)
+--// Duplicate делает точную копию предмета в хотбар; Delete удаляет только дупы
 
 -- =========================
 -- ======  SETTINGS  =======
 -- =========================
-local DELETE_ALL_CLONES = false     -- false: delete only latest clone; true: delete all clones
-local TOAST_DURATION = 2.0          -- seconds
-local TOGGLE_KEY = Enum.KeyCode.G   -- open/close UI
+local DELETE_ALL_DUPES = false     -- false: delete only latest dupe; true: delete all dupes
+local TOAST_DURATION = 2.0         -- seconds
+local TOGGLE_KEY = Enum.KeyCode.G  -- open/close UI
 
 -- =========================
 -- ======  SERVICES  =======
@@ -26,7 +25,7 @@ local LOCAL_PLAYER = Players.LocalPlayer
 local playerGui = LOCAL_PLAYER:WaitForChild("PlayerGui")
 
 local screenGui = Instance.new("ScreenGui")
-screenGui.Name = "CloneMenuUI"
+screenGui.Name = "DupeMenuUI"
 screenGui.ResetOnSpawn = false
 screenGui.IgnoreGuiInset = true
 screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
@@ -130,7 +129,7 @@ local function makeButton(text)
 end
 
 local duplicateBtn = makeButton("Duplicate")
-local deleteBtn = makeButton("Delete") -- ← название кнопки удаления (меняется тут)
+local deleteBtn = makeButton("Delete") -- ← текст кнопки удаления
 
 -- Toast
 local toast = Instance.new("TextLabel")
@@ -196,19 +195,19 @@ local function tagCopy(fromInstance, toInstance)
     end
 end
 
-local function deepCloneWithAttributesAndTags(source)
-    local clone = source:Clone()
+local function deepDupeWithAttributesAndTags(source)
+    local dupe = source:Clone()
     local function withSelfList(root)
         local list = {root}
         for _, d in ipairs(root:GetDescendants()) do table.insert(list, d) end
         return list
     end
     local srcList = withSelfList(source)
-    local cloneList = withSelfList(clone)
+    local dupeList = withSelfList(dupe)
 
-    for i = 1, math.min(#srcList, #cloneList) do
+    for i = 1, math.min(#srcList, #dupeList) do
         local src = srcList[i]
-        local dst = cloneList[i]
+        local dst = dupeList[i]
         copyAttributes(src, dst)
         tagCopy(src, dst)
 
@@ -232,26 +231,26 @@ local function deepCloneWithAttributesAndTags(source)
             end)
         end
     end
-    return clone
+    return dupe
 end
 
-local function wrapModelInTool(modelClone)
+local function wrapModelInTool(modelDupe)
     local tool = Instance.new("Tool")
-    tool.Name = modelClone.Name
+    tool.Name = modelDupe.Name
     tool.RequiresHandle = false
     tool.CanBeDropped = true
-    copyAttributes(modelClone, tool)
-    tagCopy(modelClone, tool)
-    modelClone.Parent = tool
+    copyAttributes(modelDupe, tool)
+    tagCopy(modelDupe, tool)
+    modelDupe.Parent = tool
     return tool
 end
 
-local function findClones()
+local function findDupes()
     local results = {}
     local backpack = LOCAL_PLAYER:FindFirstChild("Backpack")
     if backpack then
         for _, inst in ipairs(backpack:GetChildren()) do
-            if inst:IsA("Tool") and inst:GetAttribute("IsClone") == true then
+            if inst:IsA("Tool") and inst:GetAttribute("IsDupe") == true then
                 table.insert(results, inst)
             end
         end
@@ -259,14 +258,14 @@ local function findClones()
     local char = LOCAL_PLAYER.Character
     if char then
         for _, inst in ipairs(char:GetChildren()) do
-            if inst:IsA("Tool") and inst:GetAttribute("IsClone") == true then
+            if inst:IsA("Tool") and inst:GetAttribute("IsDupe") == true then
                 table.insert(results, inst)
             end
         end
     end
     table.sort(results, function(a, b)
-        local ta = tonumber(a:GetAttribute("CloneTimestamp")) or 0
-        local tb = tonumber(b:GetAttribute("CloneTimestamp")) or 0
+        local ta = tonumber(a:GetAttribute("DupeTimestamp")) or 0
+        local tb = tonumber(b:GetAttribute("DupeTimestamp")) or 0
         return ta < tb
     end)
     return results
@@ -282,45 +281,45 @@ local function duplicateEquipped()
         return
     end
 
-    local cloneRoot
+    local dupeRoot
     if equipped:IsA("Tool") then
-        cloneRoot = deepCloneWithAttributesAndTags(equipped)
+        dupeRoot = deepDupeWithAttributesAndTags(equipped)
     else
-        cloneRoot = wrapModelInTool(deepCloneWithAttributesAndTags(equipped))
+        dupeRoot = wrapModelInTool(deepDupeWithAttributesAndTags(equipped))
     end
 
-    -- mark clone so our Delete targets only clones
-    cloneRoot:SetAttribute("IsClone", true)
-    cloneRoot:SetAttribute("CloneTimestamp", os.clock())
+    -- mark dupe so Delete targets only dupes
+    dupeRoot:SetAttribute("IsDupe", true)
+    dupeRoot:SetAttribute("DupeTimestamp", os.clock())
 
-    -- client-side: add to Backpack so it shows in hotbar
+    -- add to Backpack so it appears in hotbar
     local backpack = LOCAL_PLAYER:WaitForChild("Backpack")
-    cloneRoot.Parent = backpack
+    dupeRoot.Parent = backpack
 
-    -- try to equip locally (некоторые игры позволяют)
+    -- try to equip locally
     local char = LOCAL_PLAYER.Character
     local hum = char and char:FindFirstChildOfClass("Humanoid")
     if hum then
-        pcall(function() hum:EquipTool(cloneRoot) end)
+        pcall(function() hum:EquipTool(dupeRoot) end)
     end
 
-    showToast("Cloned to hotbar (client).")
+    showToast("Duped to hotbar.")
 end
 
-local function deleteLatestClone()
-    local clones = findClones()
-    if #clones == 0 then
-        showToast("No clones to delete.")
+local function deleteLatestDupe()
+    local dupes = findDupes()
+    if #dupes == 0 then
+        showToast("No dupes to delete.")
         return
     end
 
-    if DELETE_ALL_CLONES then
-        for _, tool in ipairs(clones) do pcall(function() tool:Destroy() end) end
-        showToast(("Deleted %d clone(s)."):format(#clones))
+    if DELETE_ALL_DUPES then
+        for _, tool in ipairs(dupes) do pcall(function() tool:Destroy() end) end
+        showToast(("Deleted %d dupe(s)."):format(#dupes))
     else
-        local latest = clones[#clones]
+        local latest = dupes[#dupes]
         pcall(function() latest:Destroy() end)
-        showToast("Deleted latest clone.")
+        showToast("Deleted latest dupe.")
     end
 end
 
@@ -345,7 +344,7 @@ end)
 
 deleteBtn.MouseButton1Click:Connect(function()
     if debounce then return end; debounce = true
-    deleteLatestClone()
+    deleteLatestDupe()
     task.delay(0.1, function() debounce = false end)
 end)
 
