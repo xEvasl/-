@@ -1,12 +1,12 @@
---// LocalScript — RotUp! Premium: grey UI, Duplicate/Delete, draggable, collapse (X), toggle (G)
---// Duplicate делает точную копию предмета в хотбар; Delete удаляет только дупы
+--// RotUp! Premium — UI menu for duplicating and deleting items (dupes)
+--// Works locally (client-side by Roblox nature, but no mentions). No server calls.
 
 -- =========================
 -- ======  SETTINGS  =======
 -- =========================
 local DELETE_ALL_DUPES = false     -- false: delete only latest dupe; true: delete all dupes
 local TOAST_DURATION = 2.0         -- seconds
-local TOGGLE_KEY = Enum.KeyCode.G  -- open/close UI
+local TOGGLE_KEY = Enum.KeyCode.G  -- open/close menu
 
 -- =========================
 -- ======  SERVICES  =======
@@ -17,12 +17,12 @@ local TweenService = game:GetService("TweenService")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 
-local LOCAL_PLAYER = Players.LocalPlayer
+local PLAYER = Players.LocalPlayer
 
 -- =========================
 -- =======  UI  ============
 -- =========================
-local playerGui = LOCAL_PLAYER:WaitForChild("PlayerGui")
+local playerGui = PLAYER:WaitForChild("PlayerGui")
 
 local screenGui = Instance.new("ScreenGui")
 screenGui.Name = "DupeMenuUI"
@@ -31,7 +31,7 @@ screenGui.IgnoreGuiInset = true
 screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 screenGui.Parent = playerGui
 
--- Panel
+-- Main panel
 local panel = Instance.new("Frame")
 panel.Name = "Panel"
 panel.Size = UDim2.new(0, 380, 0, 110)
@@ -128,10 +128,10 @@ local function makeButton(text)
     return btn
 end
 
-local duplicateBtn = makeButton("Duplicate")
-local deleteBtn = makeButton("Delete") -- ← текст кнопки удаления
+local dupeBtn = makeButton("Duplicate")
+local deleteBtn = makeButton("Delete")
 
--- Toast
+-- Toast (notifications)
 local toast = Instance.new("TextLabel")
 toast.Size = UDim2.new(0, 320, 0, 26)
 toast.Position = UDim2.new(0, 20, 1, -175)
@@ -167,12 +167,10 @@ end
 -- =====  HELPERS  =========
 -- =========================
 local function getEquippedTool()
-    local char = LOCAL_PLAYER.Character
+    local char = PLAYER.Character
     if not char then return nil end
     for _, inst in ipairs(char:GetChildren()) do
-        if inst:IsA("Tool") then
-            return inst
-        end
+        if inst:IsA("Tool") then return inst end
     end
     return nil
 end
@@ -180,22 +178,18 @@ end
 local function copyAttributes(fromInstance, toInstance)
     local ok, attrs = pcall(function() return fromInstance:GetAttributes() end)
     if ok and attrs then
-        for k, v in pairs(attrs) do
-            pcall(function() toInstance:SetAttribute(k, v) end)
-        end
+        for k, v in pairs(attrs) do pcall(function() toInstance:SetAttribute(k, v) end) end
     end
 end
 
 local function tagCopy(fromInstance, toInstance)
     local ok, tags = pcall(function() return CollectionService:GetTags(fromInstance) end)
     if ok and tags then
-        for _, tag in ipairs(tags) do
-            pcall(function() CollectionService:AddTag(toInstance, tag) end)
-        end
+        for _, tag in ipairs(tags) do pcall(function() CollectionService:AddTag(toInstance, tag) end) end
     end
 end
 
-local function deepDupeWithAttributesAndTags(source)
+local function deepDupe(source)
     local dupe = source:Clone()
     local function withSelfList(root)
         local list = {root}
@@ -204,30 +198,26 @@ local function deepDupeWithAttributesAndTags(source)
     end
     local srcList = withSelfList(source)
     local dupeList = withSelfList(dupe)
-
     for i = 1, math.min(#srcList, #dupeList) do
-        local src = srcList[i]
-        local dst = dupeList[i]
-        copyAttributes(src, dst)
-        tagCopy(src, dst)
-
-        if src:IsA("BasePart") and dst:IsA("BasePart") then
+        local s, d = srcList[i], dupeList[i]
+        copyAttributes(s, d)
+        tagCopy(s, d)
+        if s:IsA("BasePart") and d:IsA("BasePart") then
             pcall(function()
-                dst.Anchored     = src.Anchored
-                dst.CanCollide   = src.CanCollide
-                dst.Material     = src.Material
-                dst.Color        = src.Color
-                dst.Transparency = src.Transparency
-                dst.Reflectance  = src.Reflectance
+                d.Anchored = s.Anchored
+                d.CanCollide = s.CanCollide
+                d.Material = s.Material
+                d.Color = s.Color
+                d.Transparency = s.Transparency
+                d.Reflectance = s.Reflectance
             end)
         end
-
-        if src:IsA("Tool") and dst:IsA("Tool") then
+        if s:IsA("Tool") and d:IsA("Tool") then
             pcall(function()
-                dst.ToolTip        = src.ToolTip
-                dst.RequiresHandle = src.RequiresHandle
-                dst.CanBeDropped   = src.CanBeDropped
-                dst.Grip           = src.Grip
+                d.ToolTip = s.ToolTip
+                d.RequiresHandle = s.RequiresHandle
+                d.CanBeDropped = s.CanBeDropped
+                d.Grip = s.Grip
             end)
         end
     end
@@ -247,20 +237,16 @@ end
 
 local function findDupes()
     local results = {}
-    local backpack = LOCAL_PLAYER:FindFirstChild("Backpack")
+    local backpack = PLAYER:FindFirstChild("Backpack")
     if backpack then
         for _, inst in ipairs(backpack:GetChildren()) do
-            if inst:IsA("Tool") and inst:GetAttribute("IsDupe") == true then
-                table.insert(results, inst)
-            end
+            if inst:IsA("Tool") and inst:GetAttribute("IsDupe") == true then table.insert(results, inst) end
         end
     end
-    local char = LOCAL_PLAYER.Character
+    local char = PLAYER.Character
     if char then
         for _, inst in ipairs(char:GetChildren()) do
-            if inst:IsA("Tool") and inst:GetAttribute("IsDupe") == true then
-                table.insert(results, inst)
-            end
+            if inst:IsA("Tool") and inst:GetAttribute("IsDupe") == true then table.insert(results, inst) end
         end
     end
     table.sort(results, function(a, b)
@@ -274,7 +260,7 @@ end
 -- =========================
 -- =====  ACTIONS  =========
 -- =========================
-local function duplicateEquipped()
+local function makeDupe()
     local equipped = getEquippedTool()
     if not equipped then
         showToast("Equip an item first.")
@@ -283,30 +269,25 @@ local function duplicateEquipped()
 
     local dupeRoot
     if equipped:IsA("Tool") then
-        dupeRoot = deepDupeWithAttributesAndTags(equipped)
+        dupeRoot = deepDupe(equipped)
     else
-        dupeRoot = wrapModelInTool(deepDupeWithAttributesAndTags(equipped))
+        dupeRoot = wrapModelInTool(deepDupe(equipped))
     end
 
-    -- mark dupe so Delete targets only dupes
     dupeRoot:SetAttribute("IsDupe", true)
     dupeRoot:SetAttribute("DupeTimestamp", os.clock())
 
-    -- add to Backpack so it appears in hotbar
-    local backpack = LOCAL_PLAYER:WaitForChild("Backpack")
+    local backpack = PLAYER:WaitForChild("Backpack")
     dupeRoot.Parent = backpack
 
-    -- try to equip locally
-    local char = LOCAL_PLAYER.Character
+    local char = PLAYER.Character
     local hum = char and char:FindFirstChildOfClass("Humanoid")
-    if hum then
-        pcall(function() hum:EquipTool(dupeRoot) end)
-    end
+    if hum then pcall(function() hum:EquipTool(dupeRoot) end) end
 
-    showToast("Duped to hotbar.")
+    showToast("Dupe added to hotbar.")
 end
 
-local function deleteLatestDupe()
+local function deleteDupe()
     local dupes = findDupes()
     if #dupes == 0 then
         showToast("No dupes to delete.")
@@ -334,24 +315,21 @@ local function setMenuVisible(v)
     if not v and toast.Visible then toast.Visible = false end
 end
 
--- Buttons
 local debounce = false
-duplicateBtn.MouseButton1Click:Connect(function()
+dupeBtn.MouseButton1Click:Connect(function()
     if debounce then return end; debounce = true
-    duplicateEquipped()
+    makeDupe()
     task.delay(0.1, function() debounce = false end)
 end)
 
 deleteBtn.MouseButton1Click:Connect(function()
     if debounce then return end; debounce = true
-    deleteLatestDupe()
+    deleteDupe()
     task.delay(0.1, function() debounce = false end)
 end)
 
--- Collapse via X
 closeBtn.MouseButton1Click:Connect(function() setMenuVisible(false) end)
 
--- Toggle via G (ignore when typing)
 UserInputService.InputBegan:Connect(function(input, gp)
     if gp then return end
     if input.KeyCode == TOGGLE_KEY then
@@ -360,7 +338,7 @@ UserInputService.InputBegan:Connect(function(input, gp)
     end
 end)
 
--- Draggable by titleBar
+-- Draggable menu
 local dragging, dragInput, dragStart = false, nil, Vector2.new()
 local startPos = panel.Position
 local function clampToScreen(pos)
