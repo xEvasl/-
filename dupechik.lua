@@ -150,7 +150,7 @@ local function makeButton(text)
 end
 
 local duplicateBtn = makeButton("Duplicate")
-local deleteBtn = makeButton("Delete")
+local deleteBtn = makeButton("Destroy")
 
 -- Toast
 local toast = Instance.new("TextLabel")
@@ -451,3 +451,4 @@ RunService.RenderStepped:Connect(function()
     shadow.Size = panel.Size
     shadow.Visible = panel.Visible
 end)
+
