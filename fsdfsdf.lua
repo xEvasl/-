@@ -1,410 +1,333 @@
--- LocalScript: draggable menu + "Clone Equipped Item" (client-side only)
--- Place into StarterPlayer -> StarterPlayerScripts
--- WARNING: use only in your own place / Studio. This does not modify server state.
+-- Visual-only "copy" (safe) — Advanced UI + visual simulator
+-- Paste into executor (loadstring) while in-game.
 
--- Services
 local Players = game:GetService("Players")
-local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
 local Debris = game:GetService("Debris")
-local StarterGui = game:GetService("StarterGui")
 
 local player = Players.LocalPlayer
+local PlayerGui = player:WaitForChild("PlayerGui")
 
--- Config
-local OPEN_KEY = Enum.KeyCode.G                -- открыть меню
-local WORLD_OFFSET = Vector3.new(3, 0, 0)      -- где появится призрачная модель
-local WORLD_LIFETIME = 20                      -- время жизни призрачной модели (сек)
-local VISUAL_TOOL_TTL = 0                      -- 0 = не удалять автоматически; можно >0
-local USE_FORCEFIELD = true
-local TRANSPARENCY_ADD = 0.25
-local COOLDOWN = 0.6                           -- защита от спама кнопки
-
--- helpers
-local function notify(title, text, duration)
-    pcall(function()
-        StarterGui:SetCore("SendNotification", {
-            Title = tostring(title or "Info"),
-            Text = tostring(text or ""),
-            Duration = duration or 2
-        })
-    end)
+-- cleanup
+if PlayerGui:FindFirstChild("VisualDupeGUI") then
+    PlayerGui.VisualDupeGUI:Destroy()
+end
+if workspace:FindFirstChild("LocalVisualCopies_"..tostring(player.UserId)) then
+    workspace["LocalVisualCopies_"..tostring(player.UserId)]:Destroy()
 end
 
-local function safePart(p: BasePart)
-    if not p then return end
-    p.Anchored = true
-    p.CanCollide = false
-    p.CanQuery = false
-    p.Massless = true
-    p.Transparency = math.clamp(p.Transparency + TRANSPARENCY_ADD, 0, 1)
-    if USE_FORCEFIELD then p.Material = Enum.Material.ForceField end
-end
-
-local function stripScripts(inst: Instance)
-    for _, d in ipairs(inst:GetDescendants()) do
-        if d:IsA("Script") or d:IsA("LocalScript") or d:IsA("ModuleScript") then
-            d:Destroy()
-        elseif d:IsA("ParticleEmitter") or d:IsA("Beam") then
-            d.Enabled = false
+-- small helper: clone appearance of a part (handle)
+local function cloneAppearanceOfDescendants(srcParent, destParent)
+    for _,obj in ipairs(srcParent:GetDescendants()) do
+        if obj:IsA("BasePart") then
+            local p = Instance.new("Part")
+            p.Name = obj.Name
+            p.Size = obj.Size
+            p.CFrame = obj.CFrame
+            p.Anchored = true
+            p.CanCollide = false
+            p.Material = obj.Material
+            p.BrickColor = obj.BrickColor
+            p.Transparency = obj.Transparency
+            p.Parent = destParent
+            -- copy special mesh if present
+            local mesh = obj:FindFirstChildOfClass("SpecialMesh")
+            if mesh then
+                local m = mesh:Clone()
+                m.Parent = p
+            end
+            -- copy meshpart properties if original was MeshPart
+        elseif obj:IsA("MeshPart") then
+            local mp = Instance.new("Part")
+            mp.Name = obj.Name.."_mesh"
+            mp.Size = obj.Size
+            mp.CFrame = obj.CFrame
+            mp.Anchored = true
+            mp.CanCollide = false
+            mp.Transparency = obj.Transparency
+            mp.Material = obj.Material
+            mp.BrickColor = obj.BrickColor
+            mp.Parent = destParent
+            local sm = Instance.new("SpecialMesh", mp)
+            sm.MeshType = Enum.MeshType.FileMesh
+            sm.MeshId = obj.MeshId or ""
+            sm.TextureId = obj.TextureID or ""
         end
+        -- decals/texture not copied to keep safe/simple
     end
 end
 
-local function firstGeometryDescendant(inst: Instance): BasePart?
-    for _, d in ipairs(inst:GetDescendants()) do
-        if d:IsA("BasePart") or d:IsA("MeshPart") or d:IsA("UnionOperation") then
-            return d
-        end
-    end
-    return nil
-end
+-- create root folder for local visual copies
+local copiesFolder = Instance.new("Folder")
+copiesFolder.Name = "LocalVisualCopies_"..tostring(player.UserId)
+copiesFolder.Parent = workspace
 
--- Пытаемся извлечь ID предмета из атрибутов или Value-объектов внутри Tool
-local function extractItemId(tool: Tool): string?
+-- UI: create nice Advanced look (icon, panel, progress bar)
+local sg = Instance.new("ScreenGui")
+sg.Name = "VisualDupeGUI"
+sg.ResetOnSpawn = false
+sg.Parent = PlayerGui
+
+local icon = Instance.new("TextButton", sg)
+icon.Name = "VDIcon"
+icon.Text = "📜"
+icon.Font = Enum.Font.Code
+icon.TextScaled = true
+icon.TextColor3 = Color3.fromRGB(0,255,110)
+icon.BackgroundColor3 = Color3.fromRGB(6,20,6)
+icon.Size = UDim2.new(0,48,0,48)
+icon.Position = UDim2.new(1, -64, 0, 12)
+local ic = Instance.new("UICorner", icon); ic.CornerRadius = UDim.new(0,10)
+
+local panel = Instance.new("Frame", sg)
+panel.Name = "VDPanel"
+panel.Size = UDim2.new(0,420,0,240)
+panel.Position = UDim2.new(1, -20, 0, 72)
+panel.BackgroundColor3 = Color3.fromRGB(8,12,8)
+local pc = Instance.new("UICorner", panel); pc.CornerRadius = UDim.new(0,14)
+local grad = Instance.new("UIGradient", panel)
+grad.Color = ColorSequence.new{ ColorSequenceKeypoint.new(0, Color3.fromRGB(0,40,0)), ColorSequenceKeypoint.new(1, Color3.fromRGB(0,120,50)) }
+grad.Rotation = 90
+
+local title = Instance.new("TextLabel", panel)
+title.Size = UDim2.new(1, -24, 0, 44)
+title.Position = UDim2.new(0,12,0,8)
+title.BackgroundTransparency = 1
+title.Font = Enum.Font.Code
+title.TextScaled = true
+title.Text = "💸 Visual Dupe Simulator"
+title.TextColor3 = Color3.fromRGB(0,255,140)
+
+local sub = Instance.new("TextLabel", panel)
+sub.Size = UDim2.new(1, -24, 0, 20)
+sub.Position = UDim2.new(0,12,0,48)
+sub.BackgroundTransparency = 1
+sub.Font = Enum.Font.Code
+sub.TextScaled = true
+sub.Text = "Local simulation — no server changes"
+sub.TextColor3 = Color3.fromRGB(120,255,160)
+
+local messageLabel = Instance.new("TextLabel", panel)
+messageLabel.Size = UDim2.new(1, -24, 0, 32)
+messageLabel.Position = UDim2.new(0, 12, 0, 76)
+messageLabel.BackgroundTransparency = 1
+messageLabel.Font = Enum.Font.Code
+messageLabel.TextScaled = true
+messageLabel.Text = "Ready."
+messageLabel.TextColor3 = Color3.fromRGB(180,255,160)
+
+local barBg = Instance.new("Frame", panel)
+barBg.Size = UDim2.new(0, 396, 0, 28)
+barBg.Position = UDim2.new(0,12,0,112)
+barBg.BackgroundColor3 = Color3.fromRGB(6,6,6)
+local bcorner = Instance.new("UICorner", barBg); bcorner.CornerRadius = UDim.new(0,10)
+
+local bar = Instance.new("Frame", barBg)
+bar.Size = UDim2.new(0,0,1,0)
+bar.Position = UDim2.new(0,0,0,0)
+bar.BackgroundColor3 = Color3.fromRGB(0,255,140)
+local barCorner = Instance.new("UICorner", bar); barCorner.CornerRadius = UDim.new(0,10)
+
+local progressLabel = Instance.new("TextLabel", barBg)
+progressLabel.Size = UDim2.new(1,0,1,0)
+progressLabel.BackgroundTransparency = 1
+progressLabel.Font = Enum.Font.Code
+progressLabel.TextScaled = true
+progressLabel.Text = "Idle"
+progressLabel.TextColor3 = Color3.fromRGB(0,0,0)
+
+local input = Instance.new("TextBox", panel)
+input.Size = UDim2.new(0,220,0,34)
+input.Position = UDim2.new(0,12,0,152)
+input.Font = Enum.Font.Code
+input.PlaceholderText = "Local name for copy (optional)"
+input.Text = ""
+input.TextColor3 = Color3.fromRGB(0,255,110)
+input.BackgroundColor3 = Color3.fromRGB(6,6,6)
+local ic2 = Instance.new("UICorner", input); ic2.CornerRadius = UDim.new(0,8)
+
+local startBtn = Instance.new("TextButton", panel)
+startBtn.Size = UDim2.new(0,160,0,36)
+startBtn.Position = UDim2.new(0,244,0,152)
+startBtn.Font = Enum.Font.Code
+startBtn.Text = "Start Visual Copy"
+startBtn.TextScaled = true
+startBtn.BackgroundColor3 = Color3.fromRGB(0,150,50)
+startBtn.TextColor3 = Color3.fromRGB(0,0,0)
+local sbcorner = Instance.new("UICorner", startBtn); sbcorner.CornerRadius = UDim.new(0,8)
+
+local footer = Instance.new("TextLabel", panel)
+footer.Size = UDim2.new(1,-24,0,20)
+footer.Position = UDim2.new(0,12,0,196)
+footer.BackgroundTransparency = 1
+footer.Font = Enum.Font.Code
+footer.TextScaled = true
+footer.Text = "Client-only visual simulator"
+footer.TextColor3 = Color3.fromRGB(100,255,160)
+
+-- panel slide helpers
+local shown = false
+local tweenInfo = TweenInfo.new(0.35, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
+local function togglePanel()
+    shown = not shown
+    if shown then
+        TweenService:Create(panel, tweenInfo, {Position = UDim2.new(1, -440, 0, 72)}):Play()
+    else
+        TweenService:Create(panel, tweenInfo, {Position = UDim2.new(1, -20, 0, 72)}):Play()
+    end
+end
+icon.MouseButton1Click:Connect(togglePanel)
+
+-- function: create local visual copy of the currently equipped tool (appearance only)
+local function createLocalVisualCopyFromTool(tool, name)
     if not tool then return nil end
-    local keys = {"ItemId", "ItemID", "ID", "AssetId", "assetId", "itemId"}
-    for _, k in ipairs(keys) do
-        local v = tool:GetAttribute(k)
-        if v ~= nil then return tostring(v) end
-    end
-    -- value objects
-    for _, k in ipairs(keys) do
-        local obj = tool:FindFirstChild(k)
-        if obj then
-            if obj:IsA("StringValue") or obj:IsA("IntValue") or obj:IsA("NumberValue") then
-                return tostring(obj.Value)
-            end
-        end
-    end
-    return nil
-end
-
--- Построить world-visual (Model) из Tool (копируем только геометрию)
-local function buildWorldVisualFromTool(tool: Tool): Model?
-    if not tool or not tool:IsDescendantOf(game) then return nil end
-
     local model = Instance.new("Model")
-    model.Name = tool.Name .. "_CLONE_VISUAL"
+    model.Name = "LocalVisualCopy_" .. (tostring(name) ~= "" and name or tool.Name)
+    model.Parent = copiesFolder
 
-    -- копируем все BasePart/Mesh/Accessory
-    for _, d in ipairs(tool:GetDescendants()) do
-        if d:IsA("BasePart") or d:IsA("MeshPart") or d:IsA("UnionOperation") or d:IsA("Accessory") then
-            local ok, c = pcall(function() return d:Clone() end)
-            if ok and c then
-                -- не добавляем скрипты — Accessory может содержать Handle (часть) — это ок
-                c.Parent = model
+    -- try to copy Handle or first BasePart
+    local handle = tool:FindFirstChild("Handle") or tool:FindFirstChildWhichIsA("BasePart") or tool:FindFirstChildWhichIsA("MeshPart")
+    if handle then
+        -- create a visual part with same appearance
+        local p = Instance.new("Part")
+        p.Name = "Visual_"..handle.Name
+        p.Size = handle.Size
+        p.Anchored = true
+        p.CanCollide = false
+        p.Material = handle.Material
+        p.BrickColor = handle.BrickColor
+        p.Transparency = handle.Transparency
+        p.CFrame = (player.Character and player.Character.PrimaryPart and player.Character.PrimaryPart.CFrame) or CFrame.new(0,5,0)
+        p.Parent = model
+
+        -- if handle contains a SpecialMesh, clone it
+        local sm = handle:FindFirstChildOfClass("SpecialMesh")
+        if sm then
+            local nsm = sm:Clone()
+            nsm.Parent = p
+        elseif handle:IsA("MeshPart") then
+            -- MeshPart -> copy MeshId/TextureId if present
+            local nsm = Instance.new("SpecialMesh", p)
+            if handle.MeshId then nsm.MeshId = handle.MeshId end
+            if handle.TextureID then nsm.TextureId = handle.TextureID end
+        end
+
+        -- tag label (BillboardGui attached to part)
+        local tag = Instance.new("BillboardGui", p)
+        tag.Size = UDim2.new(0,140,0,40)
+        tag.AlwaysOnTop = true
+        tag.Adornee = p
+        local tl = Instance.new("TextLabel", tag)
+        tl.Size = UDim2.new(1,0,1,0)
+        tl.BackgroundTransparency = 1
+        tl.Font = Enum.Font.Code
+        tl.TextScaled = true
+        tl.TextColor3 = Color3.fromRGB(0,0,0)
+        tl.Text = "Copy: "..(name ~= "" and name or tool.Name)
+    else
+        -- if no parts, try to clone appearance of descendants (safe)
+        cloneAppearanceOfDescendants(tool, model)
+    end
+
+    -- position model near player (to the right)
+    local hrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+    if hrp then
+        local pos = hrp.Position + hrp.CFrame.RightVector * 2 + Vector3.new(0,1,0)
+        for _, part in ipairs(model:GetDescendants()) do
+            if part:IsA("BasePart") then
+                part.CFrame = CFrame.new(pos) * CFrame.Angles(0, math.rad(45), 0)
             end
         end
     end
 
-    -- fallback: если ничего не скопировалось — клонируем Tool и извлекаем части
-    if #model:GetChildren() == 0 then
-        local tmp = tool:Clone()
-        stripScripts(tmp)
-        for _, d in ipairs(tmp:GetDescendants()) do
-            if d:IsA("BasePart") or d:IsA("MeshPart") or d:IsA("UnionOperation") then
-                d.Parent = model
+    -- floating animation
+    spawn(function()
+        local t = 0
+        while model.Parent == copiesFolder do
+            t = t + 0.03
+            for _, part in ipairs(model:GetDescendants()) do
+                if part:IsA("BasePart") then
+                    part.CFrame = part.CFrame * CFrame.new(0, math.sin(t)*0.002, 0)
+                end
             end
+            RunService.Heartbeat:Wait()
         end
-        tmp:Destroy()
-    end
+    end)
 
-    if #model:GetChildren() == 0 then
-        model:Destroy()
-        return nil
-    end
-
-    local primary: BasePart? = nil
-    for _, d in ipairs(model:GetDescendants()) do
-        if d:IsA("BasePart") then
-            safePart(d)
-            if not primary then primary = d end
-        end
-    end
-
-    if not primary then
-        model:Destroy()
-        return nil
-    end
-
-    model.PrimaryPart = primary
+    Debris:AddItem(model, 12)
     return model
 end
 
--- Разместить призрачную модель рядом с персонажем и сделать fade-in
-local function placeModelNearCharacter(model: Model)
-    local char = player.Character
-    if not char or not char.PrimaryPart then
-        model:Destroy()
-        return
-    end
+-- visual progress sequence (similar steps to your second script)
+local function runVisualCopySequence(name)
+    messageLabel.Text = "Initializing visual copy..."
+    progressLabel.Text = "0%"
+    bar.Size = UDim2.new(0,0,1,0)
 
-    local targetCF = char.PrimaryPart.CFrame * CFrame.new(WORLD_OFFSET)
-    pcall(function() model:PivotTo(targetCF) end)
-    model.Parent = workspace
+    local steps = {
+        {label = "Scanning item...", time = 0.9, pct = 15},
+        {label = "Locking visuals...", time = 0.7, pct = 35},
+        {label = "Simulating transfer...", time = 1.2, pct = 65},
+        {label = "Finalizing local model...", time = 0.9, pct = 90},
+        {label = "Finishing...", time = 0.6, pct = 100},
+    }
 
-    for _, d in ipairs(model:GetDescendants()) do
-        if d:IsA("BasePart") then
-            local t0 = d.Transparency
-            d.Transparency = math.min(1, t0 + 0.6)
-            local tween = TweenService:Create(d, TweenInfo.new(0.14), {Transparency = t0})
-            tween:Play()
+    spawn(function()
+        for i,step in ipairs(steps) do
+            messageLabel.Text = step.label
+            progressLabel.Text = tostring(math.floor(step.pct)) .. "%"
+            local target = UDim2.new(step.pct/100, 0, 1, 0)
+            bar:TweenSize(target, Enum.EasingDirection.Out, Enum.EasingStyle.Quad, step.time, true)
+            task.wait(step.time + 0.05)
         end
-    end
 
-    Debris:AddItem(model, WORLD_LIFETIME)
-end
-
--- Создать локальный Tool в Backpack, используя первую найденную геометрию из src Tool
-local function createVisualToolInHotbarFromTool(src: Tool): Tool
-    local backpack = player:WaitForChild("Backpack")
-    local tool = Instance.new("Tool")
-    tool.Name = "[CLONE] " .. (src and src.Name or "Item")
-    tool.CanBeDropped = false
-    tool.RequiresHandle = true
-    tool:SetAttribute("VisualOnly", true)
-    -- попытка скопировать реалистичный Handle
-    local geom = firstGeometryDescendant(src)
-    if geom then
-        local ok, c = pcall(function() return geom:Clone() end)
-        if ok and c and c:IsA("BasePart") then
-            c.Name = "Handle"
-            c.CanCollide = false
-            c.CanQuery = false
-            c.Massless = true
-            c.Anchored = false
-            if USE_FORCEFIELD then c.Material = Enum.Material.ForceField end
-            c.Parent = tool
-        end
-    end
-    -- если не получилось — простой куб Handle
-    if not tool:FindFirstChild("Handle") then
-        local p = Instance.new("Part")
-        p.Name = "Handle"
-        p.Size = Vector3.new(1,1,1)
-        p.CanCollide = false
-        p.CanQuery = false
-        p.Massless = true
-        p.Anchored = false
-        if USE_FORCEFIELD then p.Material = Enum.Material.ForceField end
-        p.Parent = tool
-    end
-
-    -- проставим SourceItemId, если есть
-    local id = extractItemId(src)
-    if id then
-        pcall(function() tool:SetAttribute("SourceItemId", id) end)
-    end
-
-    tool.Parent = backpack
-
-    -- опционально: удалить через TTL
-    if VISUAL_TOOL_TTL > 0 then
-        Debris:AddItem(tool, VISUAL_TOOL_TTL)
-    end
-
-    return tool
-end
-
--- Clear visuals (tools in backpack with VisualOnly + models with suffix)
-local function clearVisuals()
-    local backpack = player:FindFirstChildOfClass("Backpack")
-    if backpack then
-        for _, t in ipairs(backpack:GetChildren()) do
-            if t:IsA("Tool") and t:GetAttribute("VisualOnly") then
-                t:Destroy()
-            end
-            if t:IsA("Tool") and t:GetAttribute("SourceItemId") then
-                -- если нужно — можно отдельно чистить эти тоже
+        -- after progress finished: create local visual copy
+        local equippedTool = nil
+        if player.Character then
+            for _,c in ipairs(player.Character:GetChildren()) do
+                if c:IsA("Tool") then
+                    equippedTool = c
+                    break
+                end
             end
         end
-    end
-    for _, inst in ipairs(workspace:GetChildren()) do
-        if inst:IsA("Model") and tostring(inst.Name):match("_CLONE_VISUAL$") then
-            inst:Destroy()
+        -- fallback: try Backpack's first tool
+        if not equippedTool then
+            local bp = player:FindFirstChild("Backpack")
+            if bp then
+                for _,t in ipairs(bp:GetChildren()) do
+                    if t:IsA("Tool") then
+                        equippedTool = t
+                        break
+                    end
+                end
+            end
         end
-    end
-end
 
--- Найти экипированный Tool в персонаже (проверяет Character children)
-local function getEquippedTool(): Tool?
-    local char = player.Character
-    if not char then return nil end
-    for _, v in ipairs(char:GetChildren()) do
-        if v:IsA("Tool") then
-            return v
-        end
-    end
-    -- иногда инструмент может быть хранится иначе — можно проверить Humanoid:FindFirstChildOfClass, но обычно above works
-    return nil
-end
-
--- Основная операция: полностью клонировать экипированный предмет (модель + хотбар)
-local lastAction = 0
-local function cloneEquipped()
-    local now = tick()
-    if now - lastAction < COOLDOWN then return end
-    lastAction = now
-
-    local tool = getEquippedTool()
-    if not tool then
-        notify("Clone", "Инструмент не экипирован. Надень Tool в руку и попробуй снова.", 2.5)
-        return
-    end
-
-    -- попытка взять ID
-    local id = extractItemId(tool)
-    if id then
-        notify("Clone", "ID найден: " .. tostring(id), 2)
-    else
-        notify("Clone", "ID не найден — клонируем по геометрии.", 2)
-    end
-
-    -- 1) world visual
-    local model = buildWorldVisualFromTool(tool)
-    if model then
-        pcall(function() model:SetAttribute("SourceToolName", tool.Name) end)
-        if id then pcall(function() model:SetAttribute("SourceItemId", id) end) end
-        placeModelNearCharacter(model)
-    end
-
-    -- 2) hotbar visual
-    local vtool = createVisualToolInHotbarFromTool(tool)
-    if vtool then
-        notify("Clone", "Визуальный Tool добавлен в Backpack: " .. vtool.Name, 2.5)
-    end
-end
-
--- ──────────────────────────────────────────────────────────────────────────────
--- UI: draggable menu with button "Clone Equipped Item" + Clear
--- ──────────────────────────────────────────────────────────────────────────────
-local function createUI()
-    local sg = Instance.new("ScreenGui")
-    sg.Name = "CloneEquippedUI"
-    sg.ResetOnSpawn = false
-    sg.Parent = player:WaitForChild("PlayerGui")
-
-    local frame = Instance.new("Frame")
-    frame.Name = "Main"
-    frame.Size = UDim2.new(0, 300, 0, 140)
-    frame.Position = UDim2.new(0.5, -150, 0.6, -70)
-    frame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
-    frame.BorderSizePixel = 0
-    frame.Parent = sg
-    Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 10)
-
-    local header = Instance.new("TextLabel")
-    header.Name = "Header"
-    header.Size = UDim2.new(1, 0, 0, 36)
-    header.Position = UDim2.new(0, 0, 0, 0)
-    header.BackgroundColor3 = Color3.fromRGB(42, 42, 42)
-    header.Font = Enum.Font.GothamBold
-    header.TextSize = 15
-    header.TextColor3 = Color3.fromRGB(230, 230, 230)
-    header.Text = "  Clone Equipped Item (client)"
-    header.TextXAlignment = Enum.TextXAlignment.Left
-    header.Parent = frame
-    Instance.new("UICorner", header).CornerRadius = UDim.new(0, 10)
-
-    -- dragging logic
-    local dragging = false
-    local dragStart, startPos
-    header.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 then
-            dragging = true
-            dragStart = input.Position
-            startPos = frame.Position
-        end
-    end)
-    header.InputEnded:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 then
-            dragging = false
-        end
-    end)
-    UserInputService.InputChanged:Connect(function(input)
-        if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
-            local delta = input.Position - dragStart
-            frame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
-        end
-    end)
-
-    local info = Instance.new("TextLabel")
-    info.Size = UDim2.new(1, -20, 0, 48)
-    info.Position = UDim2.new(0, 10, 0, 44)
-    info.BackgroundTransparency = 1
-    info.Font = Enum.Font.Gotham
-    info.TextSize = 13
-    info.TextColor3 = Color3.fromRGB(200,200,200)
-    info.TextWrapped = true
-    info.Text = "Нажми кнопку — будет полностью клонирован экипированный Tool (модель + визуальный Tool в хотбар). Всё локально."
-    info.Parent = frame
-
-    local btnClone = Instance.new("TextButton")
-    btnClone.Size = UDim2.new(1, -20, 0, 36)
-    btnClone.Position = UDim2.new(0, 10, 1, -48)
-    btnClone.Font = Enum.Font.GothamBold
-    btnClone.TextSize = 14
-    btnClone.TextColor3 = Color3.fromRGB(255,255,255)
-    btnClone.BackgroundColor3 = Color3.fromRGB(0, 150, 90)
-    btnClone.Text = "Clone Equipped Item"
-    btnClone.Parent = frame
-    Instance.new("UICorner", btnClone).CornerRadius = UDim.new(0, 8)
-
-    local btnClear = Instance.new("TextButton")
-    btnClear.Size = UDim2.new(0, 120, 0, 28)
-    btnClear.Position = UDim2.new(1, -130, 0, 8)
-    btnClear.Font = Enum.Font.Gotham
-    btnClear.TextSize = 13
-    btnClear.TextColor3 = Color3.fromRGB(255,255,255)
-    btnClear.BackgroundColor3 = Color3.fromRGB(120, 120, 120)
-    btnClear.Text = "Clear Visuals"
-    btnClear.Parent = frame
-    Instance.new("UICorner", btnClear).CornerRadius = UDim.new(0, 6)
-
-    btnClone.MouseButton1Click:Connect(function()
-        btnClone.AutoButtonColor = false
-        local old = btnClone.BackgroundColor3
-        btnClone.BackgroundColor3 = Color3.fromRGB(0, 200, 120)
-        cloneEquipped()
-        task.delay(0.16, function()
-            btnClone.BackgroundColor3 = old
-            btnClone.AutoButtonColor = true
-        end)
-    end)
-
-    btnClear.MouseButton1Click:Connect(function()
-        clearVisuals()
-        notify("Clear", "Визуальные копии удалены", 2)
-    end)
-
-    -- toggle menu by G
-    UserInputService.InputBegan:Connect(function(input, gp)
-        if gp then return end
-        if input.KeyCode == OPEN_KEY then
-            frame.Visible = not frame.Visible
+        if equippedTool then
+            createLocalVisualCopyFromTool(equippedTool, name)
+            messageLabel.Text = "Local visual copy created ✔"
+            progressLabel.Text = "100%"
+            bar.BackgroundColor3 = Color3.fromRGB(255,255,255)
+            task.wait(0.12)
+            bar.BackgroundColor3 = Color3.fromRGB(0,255,140)
+        else
+            messageLabel.Text = "No tool found to copy (local only)."
+            toast("No Tool found in hand or backpack", 2)
         end
     end)
 end
 
--- init
-createUI()
+-- start button behavior
+startBtn.MouseButton1Click:Connect(function()
+    local nm = tostring(input.Text)
+    if nm == "" then nm = "item" end
+    runVisualCopySequence(nm)
+end)
 
--- Optional: also clone automatically when you Equip (if you want)
--- Uncomment if you want automatic clone on Equip:
---[[ 
-local function onCharacterAdded(char)
-    char.ChildAdded:Connect(function(child)
-        if child:IsA("Tool") then
-            -- short delay: often tool will fire Equipped event; do safe call
-            child.Equipped:Connect(function() 
-                cloneEquipped()
-            end)
-        end
-    end)
-end
-
-if player.Character then onCharacterAdded(player.Character) end
-player.CharacterAdded:Connect(onCharacterAdded)
-]]
-
+-- initial positioning (slide a little hidden)
+panel.Position = UDim2.new(1, -20, 0, 72)
+task.wait(0.05)
+togglePanel() togglePanel() -- ensure closed state
+toast("Visual Dupe Simulator ready. Click 📜 to open.", 2)
