@@ -187,30 +187,3 @@ end
 
 local container = findMenuContainer()
 buildToggleButton(container)
-
--- Если у вас в файле уже есть система кнопок и глобальные таблицы/регистры — 
--- при желании можно зарегистрировать фичу:
-_G.AutoGeorge = {
-    getEnabled = function() return autoGeorgeEnabled end,
-    setEnabled = function(v: boolean)
-        if v ~= autoGeorgeEnabled then
-            autoGeorgeEnabled = not autoGeorgeEnabled
-            -- найдём кнопку и дёрнем клик, чтобы синхронно обновить UI/тосты
-            local btn = nil
-            local pg = Players.LocalPlayer:FindFirstChild("PlayerGui")
-            if pg then
-                btn = pg:FindFirstChild("AutoGeorgeToggle", true)
-            end
-            if btn and btn:IsA("TextButton") then
-                btn:Activate()
-            else
-                -- прямой fallback
-                pcall(function() StarterGui:SetCore("ProximityPromptEnabled", not v) end)
-                pcall(function() ProximityPromptService.Enabled = not v end)
-                toast("Auto George: " .. (v and "ON" or "OFF"))
-            end
-        end
-    end,
-    debugPrompt = function() return georgePrompt end,
-}
--- === /Auto George Toggle =====================================================
